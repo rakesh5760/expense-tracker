@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import datetime as dt
@@ -61,12 +60,7 @@ if st.session_state.logged_in:
 
     # --- Greeting ---
     current_hour = dt.datetime.now().hour
-    if current_hour < 12:
-        greet = "Good morning ☀️"
-    elif current_hour < 18:
-        greet = "Good afternoon 🌤️"
-    else:
-        greet = "Good evening 🌙"
+    greet = "Good morning ☀️" if current_hour < 12 else "Good afternoon 🌤️" if current_hour < 18 else "Good evening 🌙"
     st.header(f"{greet}, let's track your expenses!")
 
     # --- Expense Input Form ---
@@ -122,10 +116,34 @@ if st.session_state.logged_in:
             else:
                 st.success(f"✅ You're within budget! ₹{remaining_budget:.2f} remaining.")
 
-            # --- Show Data ---
+            # --- Edit & Delete Table ---
             st.subheader(f"📋 Expenses in {month_selected}")
-            st.dataframe(df_filtered.sort_values("Date", ascending=False), use_container_width=True)
+            df_filtered["Delete"] = False
+            edited_df = st.data_editor(df_filtered, num_rows="dynamic", use_container_width=True, key="editable_table")
 
+            delete_rows = edited_df[edited_df["Delete"] == True]
+            if not delete_rows.empty and st.button("🗑️ Delete Selected Expenses"):
+                df_updated = edited_df[edited_df["Delete"] == False].drop(columns=["Delete"])
+                st.session_state.expenses = st.session_state.expenses[
+                    ~(
+                        (st.session_state.expenses["Date"].isin(delete_rows["Date"])) &
+                        (st.session_state.expenses["Category"].isin(delete_rows["Category"])) &
+                        (st.session_state.expenses["Amount"].isin(delete_rows["Amount"])) &
+                        (st.session_state.expenses["Note"].isin(delete_rows["Note"]))
+                    )
+                ]
+                save_expense_data(user_id, st.session_state.expenses)
+                st.success(f"Deleted {len(delete_rows)} expense(s).")
+                st.rerun()
+
+            if st.button("💾 Save Changes"):
+                df_to_save = edited_df.drop(columns=["Delete"])
+                mask = st.session_state.expenses["Date"].dt.strftime("%B %Y") == month_selected
+                st.session_state.expenses.loc[mask, ["Date", "Category", "Amount", "Note"]] = df_to_save[["Date", "Category", "Amount", "Note"]].values
+                save_expense_data(user_id, st.session_state.expenses)
+                st.success("✅ Changes saved successfully.")
+
+            # --- Summary & Charts ---
             st.markdown("**📌 Top Spending Categories:**")
             top_cats = df_filtered.groupby("Category")["Amount"].sum().sort_values(ascending=False)
             for i, (cat, val) in enumerate(top_cats.items()):
@@ -140,7 +158,6 @@ if st.session_state.logged_in:
                 for date, total in overspend_days.items():
                     st.markdown(f"- **{date.strftime('%b %d')}**: ₹{total:.2f}")
 
-            # --- Charts ---
             st.subheader("📊 Where Your Money Went")
             fig1, ax1 = plt.subplots()
             ax1.pie(top_cats, labels=top_cats.index, autopct="%.1f%%", startangle=140)
@@ -150,8 +167,9 @@ if st.session_state.logged_in:
             st.subheader("📈 Daily Spending Trend")
             st.line_chart(daily_totals)
 
-            # --- Download CSV ---
+            # --- Download ---
             st.download_button("⬇️ Download This Month's Data", df_filtered.to_csv(index=False), file_name="monthly_expenses.csv")
+
     else:
         st.info("💡 No expenses added yet. Start by entering your first one above!")
 else:
