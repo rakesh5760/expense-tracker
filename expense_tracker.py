@@ -4,10 +4,17 @@ import datetime as dt
 import matplotlib.pyplot as plt
 import os
 import json
+import smtplib
+import random
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # --- Configuration ---
 DATA_DIR = "user_data"
 os.makedirs(DATA_DIR, exist_ok=True)
+
+EMAIL_ADDRESS = "gonerakesh8186@gmail.com"
+EMAIL_PASSWORD = "obxz ewdw udrx aypa"
 
 # --- Helper Functions ---
 def get_user_id(email_or_phone):
@@ -33,37 +40,67 @@ def save_budget_data(user_id, budgets):
     with open(os.path.join(DATA_DIR, f"budgets_{user_id}.json"), "w") as f:
         json.dump(budgets, f)
 
+def send_otp_email(recipient, otp):
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_ADDRESS
+    msg["To"] = recipient
+    msg["Subject"] = "\U0001f512 Your OTP for Streamlit Expense Tracker"
+    body = f"Your One-Time Password (OTP) is: {otp}\n\nIt will expire in 3 minutes."
+    msg.attach(MIMEText(body, "plain"))
+    server = smtplib.SMTP("smtp.gmail.com", 587)
+    server.starttls()
+    server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+    server.send_message(msg)
+    server.quit()
+
 # --- UI Setup ---
 st.set_page_config(page_title="💰 Daily Expense Tracker", layout="wide")
 st.title("💰 Daily Expense Tracker")
 
-# --- Login Section ---
+# --- Initialize Session State ---
+for key in ["otp_sent", "actual_otp", "logged_in", "user_id", "user_email"]:
+    if key not in st.session_state:
+        st.session_state[key] = None
+
+# --- Login with Gmail OTP ---
 st.sidebar.header("🔐 Login")
-user_input = st.sidebar.text_input("Enter Email or Phone Number", max_chars=50)
-login_btn = st.sidebar.button("Login")
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "user_id" not in st.session_state:
-    st.session_state.user_id = None
+if not st.session_state.logged_in:
+    email = st.sidebar.text_input("Enter your Gmail address")
+    if st.sidebar.button("Send OTP") and email:
+        otp = str(random.randint(100000, 999999))
+        st.session_state.actual_otp = otp
+        st.session_state.user_id = get_user_id(email)
+        st.session_state.user_email = email
+        send_otp_email(email, otp)
+        st.session_state.otp_sent = True
+        st.success("✅ OTP sent to your Gmail!")
 
-if login_btn and user_input:
-    st.session_state.logged_in = True
-    st.session_state.user_id = get_user_id(user_input)
-    st.session_state.expenses = load_expense_data(st.session_state.user_id)
-    st.session_state.budgets = load_budget_data(st.session_state.user_id)
-    st.success(f"Welcome back, {user_input}!")
+    if st.session_state.otp_sent:
+        user_otp = st.sidebar.text_input("Enter OTP", max_chars=6)
+        if st.sidebar.button("Verify OTP"):
+            if user_otp == st.session_state.actual_otp:
+                st.session_state.logged_in = True
+                st.session_state.expenses = load_expense_data(st.session_state.user_id)
+                st.session_state.budgets = load_budget_data(st.session_state.user_id)
+                st.success("🔓 Logged in successfully!")
+            else:
+                st.error("❌ Incorrect OTP. Please try again.")
+else:
+    st.sidebar.markdown(f"**Logged in as:** {st.session_state.user_email}")
+    if st.sidebar.button("🚪 Logout"):
+        for key in ["logged_in", "otp_sent", "actual_otp", "user_id", "user_email", "expenses", "budgets"]:
+            st.session_state[key] = None
+        st.experimental_rerun()
 
 if st.session_state.logged_in:
     user_id = st.session_state.user_id
     df_expenses = st.session_state.expenses
 
-    # --- Greeting ---
     current_hour = dt.datetime.now().hour
     greet = "Good morning ☀️" if current_hour < 12 else "Good afternoon 🌤️" if current_hour < 18 else "Good evening 🌙"
     st.header(f"{greet}, let's track your expenses!")
 
-    # --- Expense Input Form ---
     st.subheader("🧾 Add a New Expense")
     with st.form("expense_form"):
         col1, col2 = st.columns(2)
@@ -81,24 +118,19 @@ if st.session_state.logged_in:
         df_expenses["Date"] = pd.to_datetime(df_expenses["Date"])
         st.session_state.expenses = df_expenses
         save_expense_data(user_id, df_expenses)
-        st.success(f"✅ Added ₹{amount:.2f} to '{category}' on {date.strftime('%b %d, %Y')}.")
+        st.success(f"✅ Added ₹{amount:.2f} to '{category}' on {date.strftime('%b %d, %Y')}")
 
-    # --- Show Expense Dashboard ---
     if not df_expenses.empty:
         df_expenses["Date"] = pd.to_datetime(df_expenses["Date"])
         st.subheader("📅 Filter by Month")
         month_selected = st.selectbox("Choose a month:", sorted(df_expenses["Date"].dt.strftime("%B %Y").unique(), reverse=True))
         df_filtered = df_expenses[df_expenses["Date"].dt.strftime("%B %Y") == month_selected]
-        df_filtered["Date"] = pd.to_datetime(df_filtered["Date"])
 
-        if df_filtered.empty:
-            st.info("No records for this month.")
-        else:
-            # --- Budget Section ---
+        if not df_filtered.empty:
             st.subheader("💰 Set Your Monthly Budget")
             budgets = st.session_state.budgets
             default_budget = budgets.get(month_selected, 1000.0)
-            budget_input = st.number_input(f"Set budget for {month_selected} (₹)", min_value=0.0, value=default_budget, step=100.0, key="budget")
+            budget_input = st.number_input(f"Set budget for {month_selected} (₹)", min_value=0.0, value=default_budget, step=100.0)
             budgets[month_selected] = budget_input
             save_budget_data(user_id, budgets)
 
@@ -116,10 +148,9 @@ if st.session_state.logged_in:
             else:
                 st.success(f"✅ You're within budget! ₹{remaining_budget:.2f} remaining.")
 
-            # --- Edit & Delete Table ---
             st.subheader(f"📋 Expenses in {month_selected}")
             df_filtered["Delete"] = False
-            edited_df = st.data_editor(df_filtered, num_rows="dynamic", use_container_width=True, key="editable_table")
+            edited_df = st.data_editor(df_filtered, num_rows="dynamic", use_container_width=True)
 
             delete_rows = edited_df[edited_df["Delete"] == True]
             if not delete_rows.empty and st.button("🗑️ Delete Selected Expenses"):
@@ -136,14 +167,13 @@ if st.session_state.logged_in:
                 st.success(f"Deleted {len(delete_rows)} expense(s).")
                 st.rerun()
 
-            if st.button("💾 Save Changes"):
+            if st.button("📂 Save Changes"):
                 df_to_save = edited_df.drop(columns=["Delete"])
                 mask = st.session_state.expenses["Date"].dt.strftime("%B %Y") == month_selected
                 st.session_state.expenses.loc[mask, ["Date", "Category", "Amount", "Note"]] = df_to_save[["Date", "Category", "Amount", "Note"]].values
                 save_expense_data(user_id, st.session_state.expenses)
                 st.success("✅ Changes saved successfully.")
 
-            # --- Summary & Charts ---
             st.markdown("**📌 Top Spending Categories:**")
             top_cats = df_filtered.groupby("Category")["Amount"].sum().sort_values(ascending=False)
             for i, (cat, val) in enumerate(top_cats.items()):
@@ -167,11 +197,11 @@ if st.session_state.logged_in:
             st.subheader("📈 Daily Spending Trend")
             st.line_chart(daily_totals)
 
-            # --- Download ---
             st.download_button("⬇️ Download This Month's Data", df_filtered.to_csv(index=False), file_name="monthly_expenses.csv")
 
     else:
         st.info("💡 No expenses added yet. Start by entering your first one above!")
+
 else:
     st.warning("👤 Please log in to start tracking your expenses.")
 
