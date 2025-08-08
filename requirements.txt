@@ -1,10 +1,4 @@
 streamlit
 pandas
 matplotlib
-datetime
-os
-json
-smtplib
-random
-MIMEText
-MIMEMultipart
+numpy
